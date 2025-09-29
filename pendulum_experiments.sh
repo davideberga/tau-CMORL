@@ -1,0 +1,2 @@
+#python main_pendulum_no_safety.py
+python main_pendulum_stlgym.py

@@ -1,0 +1,25 @@
+dense: True
+horizon: 10
+constants:
+    - name: thetadot_thresh
+      type: float
+      value: 0.5
+    - name: torque_thresh
+      type: float
+      value: 0.3
+variables:
+    - name: thetadot
+      type: float
+      location: obs
+      identifier: 0
+    - name: torque
+      type: float
+      location: obs
+      identifier: 1
+specifications:
+    - name: thetadot_constraint
+      spec: thetadot_constraint = eventually(always(abs(thetadot) <= thetadot_thresh))
+      weight: 1.0
+    - name: torque_constraint
+      spec: torque_constraint = eventually(always(abs(torque) <= torque_thresh))
+      weight: 1.0
