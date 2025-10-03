@@ -1,2 +1,5 @@
-#python main_pendulum_no_safety.py
+
+python main_pendulum_tuning.py
+python main_pendulum_no_safety.py
 python main_pendulum_stlgym.py
+python main_pendulum_random.py

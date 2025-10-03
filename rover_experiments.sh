@@ -1,4 +1,4 @@
-python main_rover_safety.py
+python main_rover_safety_tuning.py
 python main_rover_no_safety.py
-# python main_rover_stlgym.py
-# python main_rover_safety_random.py
+python main_rover_stlgym.py
+python main_rover_safety_random.py

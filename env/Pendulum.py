@@ -118,11 +118,8 @@ class Pendulum(gym.Env):
         self.clock = None
         self.isopen = True
 
-        # 3 + 1 indicator variable
+        # 3 + 2 indicator variable
         high = np.array([1.0, 1.0, self.max_speed, 1.0, 1.0], dtype=np.float32)
-        # This will throw a warning in tests/envs/test_envs in utils/env_checker.py as the space is not symmetric
-        #   or normalised as max_torque == 2 by default. Ignoring the issue here as the default settings are too old
-        #   to update to follow the gymnasium api
         self.action_space = spaces.Box(
             low=-self.max_torque, high=self.max_torque, shape=(1,), dtype=np.float32
         )
@@ -148,9 +145,7 @@ class Pendulum(gym.Env):
         dt = self.dt
 
         u = np.clip(u, -self.max_torque, self.max_torque)[0]
-         # for rendering
         costs = angle_normalize(th) ** 2 # + 0.1 * thdot**2 + 0.001 * (u**2)
-        # costs =  0.1 * thdot**2 + 0.001 * (u**2)
         
         # Φ = F (G((|θ| < 0.5)))
         # Maximizing cost means th = 0, phi = 0.5
@@ -160,14 +155,7 @@ class Pendulum(gym.Env):
         rho_thetadot = single["thetadot_constraint"]
         rho_torque = single["torque_constraint"]
         
-        # cost_thetadot = bool(rho_thetadot >= 0) 
-        # cost_thetadot = np.exp( self.beta * cost_thetadot)/np.exp(self.beta)
-        
         cost_thetadot = np.tanh(rho_thetadot)
-        
-        # cost_torque = bool(rho_torque >= 0) 
-        # cost_torque = np.exp( self.beta * cost_torque)/np.exp(self.beta)
-        
         cost_torque = np.tanh(rho_torque)
 
         newthdot = thdot + (3 * g / (2 * l) * np.sin(th) + 3.0 / (m * l**2) * u) * dt
@@ -180,7 +168,7 @@ class Pendulum(gym.Env):
 
         if self.render_mode == "human":
             self.render()
-        # truncation=False as the time limit is handled by the `TimeLimit` wrapper added during `make`
+
         return self._get_obs(np.array([newth, newthdot]), u), -costs, False, False, {
             "cost_thetadot": cost_thetadot,
             "cost_torque": cost_torque,
@@ -232,12 +220,13 @@ class Pendulum(gym.Env):
         thetadot_rho = 0
         torque_rho = 0
         for i in range(tau_num):
-            ## Always AVOID
+            ## G
             if (self.thetadot_constr - abs(self.past_tau_trajectory[i][0])) >= 0:
                 thetadot_rho = min(thetadot_rho + 1 / (float(self.tau + 1)), 1.0)
             else:
                 thetadot_rho = 0.0
-                
+            
+            ## G
             if (self.torque_constr - abs(self.past_tau_trajectory[i][1])) >= 0:
                 torque_rho = min(torque_rho + 1 / (float(self.tau + 1)), 1.0)
             else:
@@ -251,7 +240,6 @@ class Pendulum(gym.Env):
         self.state = next_state
         next_theta, next_thetadot = self.state
         observation = np.array([np.cos(next_theta), np.sin(next_theta), next_thetadot, thetadot_rho, torque_rho], dtype=np.float32)
-        
         
         return observation
 

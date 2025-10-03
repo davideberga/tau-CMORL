@@ -65,7 +65,7 @@ class RoverEnvCMORLSafety:
 
         self.beta = 100.0
         self.pure_state_length = 12
-        self.tau = max_steps if time_horizon is None else time_horizon
+        self.tau = 10
 
         self.past_tau_trajectory = {}
         self.episode_trajectory = {}
@@ -198,7 +198,6 @@ class RoverEnvCMORLSafety:
     def reset_trajectories(self):
         to_observe = [
             "battery",
-            "target_distance",
             "charger_distance",
             "lidar_min",
         ]
@@ -209,92 +208,56 @@ class RoverEnvCMORLSafety:
             self.episode_trajectory[var] = []
         self.past_raw_trajectory.clear()
 
-    def preprocess(self, tau_state, state):  # return pre-processed tau_mdp state
-        tau_num = len(tau_state["battery"])
-        # assert tau_num == self.tau, "dim of tau-state is wrong."
+    def globally_flag(self, phi_rho, k_s, k_e):
+        flag = 0
+        for i in range(self.tau):
+            if phi_rho[i] >= 0:
+                flag = min(flag + 1 / (float(k_e - k_s + 1)), 1.0)
+            else:
+                flag = 0.0
+        return flag - 0.5
 
+    def eventually_flag(self, phi_rho, k_s, k_e):
+        flag = 0
+        for i in range(self.tau):
+            if phi_rho[i] >= 0:
+                flag = 1.0
+            else:
+                flag = max(flag - 1 / (float(k_e - k_s + 1)), 0.0)
+        return flag - 0.5
+
+    # phi_1 until phi_2
+    def until_flag(self, phi1_rho, phi2_rho, k_s, k_e):
+        flag_1 = 0
+        flag_2 = 0
+        for i in range(self.tau):
+            if phi1_rho[i] >= 0:
+                flag_1 = min(flag_1 + 1 / (float(k_e - k_s + 1)), 1.0)
+            else:
+                flag_1 = 0.0
+                
+            if phi2_rho[i] >= 0 and flag_1 > 0:
+                flag_2 = 1.0
+            else:
+                flag_2 = max(flag_2 - 1 / (float(k_e - k_s + 1)), 0.0)
+        return flag_1 - 0.5, flag_2 - 0.5
+
+    def preprocess(self, tau_state, state):  # return pre-processed tau_cmdp state
         obs = np.zeros(self.observation_space.shape[0])
         for i in range(self.pure_state_length):
             obs[i] = state[i]
+            
+        _, _, _, _, for_preprocess = self.get_robustness()
+        minimize_charger = for_preprocess["minimize_charger"]
+        charged = for_preprocess["charged"]
+        recharge = for_preprocess["recharge"]
+        
+        alw_u = self.globally_flag(recharge, 0, 10)
+        f_1, f_until = self.until_flag(minimize_charger, charged, 0, 10)
 
-        # ==== Always rules ====
-        # if self.subSTL_1_robustness(tau_state[i]) >= 0:
-        #     f1 = min(f1 + 1/(float(self.phi_1_timebound[1] - self.phi_1_timebound[0] + 1)), 1.0)
-        # else:
-        #     f1 = 0.0
-        # ==== Always rules ====
-
-        # ==== Eventually rules ====
-        # if self.subSTL_1_robustness(tau_state[i]) >= 0:
-        #     f1 = 1.0
-        # else:
-        #     f1 = max(f1 - 1/(float(self.tau_1 + 1)), 0.0)
-        # ==== Eventually rules ====
-        # reach_charger = 0
-        # reach_goal = 0
-        # for i in range(tau_num):
-        #     # Always reach target
-        #     if self.reach_target_robustness(tau_state["target_distance"][i]) >= 0:
-        #         reach_goal = min(reach_goal + 1 / (float(self.tau + 1)), 1.0)
-        #     else:
-        #         reach_goal = 0.0
-
-        #     # Eventually reach charger
-        #     if self.reach_charger_robustness(tau_state["charger_distance"][i]) >= 0:
-        #         reach_charger = 1.0
-        #     else:
-        #         reach_charger = max(reach_charger - 1 / (float(self.tau + 1)), 0.0)
-
-        # obs[self.pure_state_length] = reach_goal - 0.5
-        # obs[self.pure_state_length + 1] = reach_charger - 0.5
-
-        (
-            rho_charger,
-            rho_avoid,
-            rho_target,
-            rho_battery,
-            cost_battery,
-            cost_target,
-            cost_charger,
-            cost_avoid,
-            for_preprocess,
-        ) = self.get_robustness()
-        eventually_charger = for_preprocess["minimize_charger"]
-        eventually_target = for_preprocess["minimize_target"]
-        always_objective = for_preprocess["reach_charger_single"]
-
-        eventually_charger_flag = 0
-        eventually_goal_flag = 0
-        always_objective_flag = 0
-        for i in range(tau_num):
-            # Eventually reach charger
-            if eventually_charger[i] >= 0:
-                eventually_charger_flag = 1.0
-            else:
-                eventually_charger_flag = max(
-                    eventually_charger_flag - 1 / (float(self.tau + 1)), 0.0
-                )
-
-            # Eventually reach target
-            if eventually_target[i] >= 0:
-                eventually_goal_flag = 1.0
-            else:
-                eventually_goal_flag = max(
-                    eventually_goal_flag - 1 / (float(self.tau + 1)), 0.0
-                )
-
-            # Always objective
-            if always_objective[i] >= 0:
-                always_objective_flag = min(
-                    always_objective_flag + 1 / (float(self.tau + 1)), 1.0
-                )
-            else:
-                always_objective_flag = 0.0
-
-        # obs[self.pure_state_length] = rho_goal  # reach_goal - 0.5
-        obs[self.pure_state_length] = eventually_charger_flag - 0.5
-        obs[self.pure_state_length + 1] = eventually_goal_flag - 0.5
-        obs[self.pure_state_length + 1] = always_objective_flag - 0.5
+        obs[self.pure_state_length] = f_1
+        obs[self.pure_state_length + 1] = f_until
+        obs[self.pure_state_length + 2] = alw_u
 
         return obs
 
@@ -338,10 +301,6 @@ class RoverEnvCMORLSafety:
         (
             rho_charger,
             rho_avoid,
-            rho_goal,
-            rho_battery,
-            cost_battery,
-            cost_goal,
             cost_charger,
             cost_avoid,
             _,
@@ -361,41 +320,26 @@ class RoverEnvCMORLSafety:
         done = goal_reached or battery or collision or truncated
 
         lidar_min_mean = 0
-        low_battery_corr = 0
         mean_battery = 0
         stay_at_charger = 0
+
         if done:
-            self.episode_trajectory["time"] = range(
-                len(self.episode_trajectory["battery"])
-            )
-            # Reeplace rho with total episode computation
-            # rho_charger, rho_avoid, rho_goal, rho_battery, _, _, _, _ = (
-            #     self.get_robustness(self.episode_trajectory)
-            # )
-            lidar_min_mean, low_battery_corr, mean_battery, stay_at_charger = (
-                self.calc_metrics()
-            )
+            lidar_min_mean, mean_battery, stay_at_charger = self.calc_metrics()
 
         return_value = (
             self.state,
-            reward,  #   + cost_goal,
+            reward,
             done,
             {
                 "collision": collision,
                 "goal_reached": goal_reached,
                 "battery": battery,
                 "truncated": truncated,
-                "total_objective_reward": reward,  # + reward_goal,
-                "reward_goal": cost_goal,
-                "reward_charger": cost_charger,
+                "cost_charger": cost_charger,
                 "cost_avoid": cost_avoid,
-                "cost_battery": cost_battery,
-                "rho_goal": rho_goal,
                 "rho_avoid": rho_avoid,
                 "rho_charger": rho_charger,
-                "rho_battery": rho_battery,
                 "lidar_mean": lidar_min_mean,
-                "battery_corr": low_battery_corr,
                 "mean_battery": mean_battery,
                 "stay_at_charger": stay_at_charger,
             },
@@ -406,78 +350,51 @@ class RoverEnvCMORLSafety:
     def calc_metrics(self):
         mean_min_lidar = np.mean(np.array(self.episode_trajectory["lidar_min"][10:]))
 
-        # --- 2. Correlation: low battery (< 2) vs charger distance ---
         battery_values = np.array(self.episode_trajectory["battery"][10:])
         charger_distances = np.array(self.episode_trajectory["charger_distance"][10:])
-        
-        def checkNan(value: float):
-            return 0 if np.isnan(value) else value
-            
-        mean_dist_low = checkNan(np.mean(charger_distances[battery_values < 0.6]))
-        mean_dist_high = checkNan(np.mean(charger_distances[battery_values >= 0.6]))
-        lb_compliance = checkNan(np.mean(charger_distances[battery_values < 0.6] < self.close_enough_charger))
 
         return (
             mean_min_lidar,
-            (mean_dist_low, mean_dist_high, lb_compliance),
             np.mean(battery_values),
             np.sum(charger_distances < self.close_enough_charger),
         )
 
     def build_stl(self):
+        
+        """Build the formulae and sub-formulae, the environment constraints
+
+        Returns:
+            _type_: RTAMT discrete stl specification
+        """
         stl_spec = rtamt.STLDiscreteTimeSpecification()
         stl_spec.name = "STL safety"
 
         # Variables declaration
         stl_spec.declare_var("battery", "float")
         stl_spec.declare_var("charger_distance", "float")
-        stl_spec.declare_var("target_distance", "float")
         stl_spec.declare_var("lidar_min", "float")
-           
 
         # Const declaration
-        stl_spec.declare_const("min_battery", "float", self.minimum_battery / 5)
-        stl_spec.declare_const("critic_battery", "float", 1 / 5)
         stl_spec.declare_const("safe_battery", "float", 3 / 5)
         stl_spec.declare_const("close_enough", "float", self.close_enough_charger)
         stl_spec.declare_const("safe_distance", "float", self.safe_distance)
-        stl_spec.declare_const(
-            "close_enough_target", "float", self.close_enough_target
-        )
 
         # Subformula declaration
-        stl_spec.declare_var("distance", "float")
-        stl_spec.declare_var("reach_charger", "float")
+        stl_spec.declare_var("recharge", "float")
+        stl_spec.declare_var("charged", "float")
         stl_spec.declare_var("safe_behavior", "float")
-        stl_spec.declare_var("reach_target", "float")
-        stl_spec.declare_var("high_battery", "float")
+        stl_spec.declare_var("recharge_until", "float")
+        stl_spec.declare_var("maximize_distance", "float")
         stl_spec.declare_var("minimize_charger", "float")
-        stl_spec.declare_var("minimize_target", "float")
 
         stl_spec.add_sub_spec("minimize_charger = charger_distance < close_enough")
+        stl_spec.add_sub_spec("maximize_distance = lidar_min > safe_distance")
+        stl_spec.add_sub_spec("charged = battery > safe_battery")
+        stl_spec.add_sub_spec("recharge_until = minimize_charger until charged")
+        stl_spec.add_sub_spec("recharge = always(recharge_until)")
+        stl_spec.add_sub_spec("safe_behavior = always(maximize_distance)")
 
-        stl_spec.add_sub_spec("minimize_target = lidar_min > safe_distance")
-
-        # stl_spec.add_sub_spec(
-        #     "reach_charger_single = (battery < min_battery) -> (eventually(minimize_charger)) and (battery >= min_battery) -> (eventually(minimize_target))"
-        # )
-        # and (battery >= min_battery) -> eventually(minimize_target)
-        stl_spec.add_sub_spec(
-            "reach_charger_single = minimize_charger until battery > safe_battery"
-        )
-        stl_spec.add_sub_spec("reach_charger = always(reach_charger_single)")
-
-        stl_spec.add_sub_spec(
-            "reach_target = always( (battery >= min_battery) -> eventually(minimize_target))"
-        )
-        stl_spec.add_sub_spec("high_battery = always(battery > min_battery)")
-        stl_spec.add_sub_spec(
-            "safe_behavior = always(minimize_target)"
-        )
-
-        stl_spec.spec = (
-            "reach_charger and safe_behavior and reach_target and high_battery"
-        )
+        stl_spec.spec = "recharge and safe_behavior"
 
         try:
             stl_spec.parse()
@@ -488,44 +405,31 @@ class RoverEnvCMORLSafety:
         return stl_spec
 
     def get_robustness(self, trajectory=None):
-        # print(trajectory)
-        # print(self.past_tau_trajectory)
+        """Compute costs and robustness measure needed for preprocessing of the given trajectory 
+        or the current tau-trajectory
+        
+        Returns:
+            _type_: Costs and robustness measure for STL constraints
+        """
         self.rules.evaluate(
             self.past_tau_trajectory if trajectory is None else trajectory
         )
-        rho_charger = self.rules.get_value("reach_charger")[0]
+        rho_charger = self.rules.get_value("recharge")[0]
         rho_avoid = self.rules.get_value("safe_behavior")[0]
-        rho_target = self.rules.get_value("reach_target")[0]
-        rho_battery = self.rules.get_value("high_battery")[0]
 
         for_preprocess = {
             "minimize_charger": self.rules.get_value("minimize_charger"),
-            "minimize_target": self.rules.get_value("minimize_target"),
-            "reach_charger_single": self.rules.get_value("reach_charger_single"),
+            "charged": self.rules.get_value("charged"),
+            "recharge": self.rules.get_value("recharge_until"),
+            "safe_behavior": self.rules.get_value("safe_behavior"),
         }
 
-        # cost_avoid = - np.exp(-self.beta * int(rho_avoid >= 0))
-        # cost_charger =  - np.exp(-self.beta * int(rho_charger >= 0))
-        # cost_target = - np.exp(-self.beta * int(rho_target >= 0))
-        # cost_battery = - np.exp(-self.beta * int(rho_battery >= 0))
-
-        # cost_avoid =  1 / (1 + np.exp(-rho_avoid)) if rho_avoid < 0 else 0
-        # cost_charger =  1 / (1 + np.exp(-rho_charger)) if rho_charger < 0 else 0
-        # cost_target =  1 / (1 + np.exp(-rho_target)) if rho_target < 0 else 0
-        # cost_battery =  1 / (1 + np.exp(-rho_battery)) if rho_battery < 0 else 0
-
-        cost_avoid = np.tanh(rho_avoid) 
-        cost_charger = np.tanh(rho_charger) 
-        cost_target = np.tanh(rho_target) 
-        cost_battery = np.tanh(rho_battery) 
+        cost_avoid = np.tanh(rho_avoid)
+        cost_charger = np.tanh(rho_charger)
 
         return (
             rho_charger,
             rho_avoid,
-            rho_target,
-            rho_battery,
-            cost_battery,
-            cost_target,
             cost_charger,
             cost_avoid,
             for_preprocess,
@@ -538,8 +442,6 @@ class RoverEnvCMORLSafety:
         self.past_tau_trajectory["lidar_min"].append(min(state[0:7]))
         self.episode_trajectory["lidar_min"].append(min(state[0:7]))
 
-        self.past_tau_trajectory["target_distance"].append(state[8])
-        self.episode_trajectory["target_distance"].append(state[8])
         self.past_tau_trajectory["charger_distance"].append(state[10])
         self.episode_trajectory["charger_distance"].append(state[10])
         self.past_tau_trajectory["battery"].append(state[11] / 5)
@@ -548,37 +450,13 @@ class RoverEnvCMORLSafety:
         self.past_raw_trajectory.append(state)
 
     def reward(self, state, next_state, action, ending):
-        goal_reached, collision, battery, truncated = ending
+        goal_reached, _, _, _ = ending
         dg, dg_prev = next_state[8], state[8]  # distance to goal
-
-        # Terminal rewards
-        # if collision or battery or truncated:
-        #     return -100
-
-        # if truncated:
-        #     return -1000
 
         if goal_reached:
             return 100
 
         return (dg_prev - dg) * 10
-
-        # Progress reward (encourages moving toward goal)
-        progress_reward = (dg_prev - dg) * 1000
-        step_penalty = -0.1  # small penalty for each step
-
-        return progress_reward + step_penalty
-
-    # Eventually
-    def reach_charger_robustness(self, distance):
-        # charger_distance < close_enough
-        return self.close_enough_charger - distance
-
-    # Eventually
-    def reach_target_robustness(self, distance):
-        # charger_distance < close_enough
-        return self.close_enough_target - distance
-
 
     def render(self):
         args = self.args
