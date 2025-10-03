@@ -12,4 +12,8 @@ __pycache__/
 
 models/
 
-results/
+results/pendulum/*
+results/rover/*
+
+!results/pendulum/.gitkeep
+!results/rover/.gitkeep
